@@ -945,6 +945,67 @@ mlir::transform::TestCountingNormalFormAttr::checkOperation(
   return DiagnosedSilenceableFailure::success();
 }
 
+/// Describe `replacement`, a fold result entry for a result of `op`.
+static std::string describeFoldReplacement(Operation *op,
+                                           OpFoldResult replacement) {
+  std::string str;
+  llvm::raw_string_ostream os(str);
+  if (!replacement) {
+    os << "keep";
+  } else if (auto attr = dyn_cast<Attribute>(replacement)) {
+    os << attr;
+  } else {
+    Value value = cast<Value>(replacement);
+    auto result = dyn_cast<OpResult>(value);
+    auto operand = llvm::find(op->getOperands(), value);
+    if (result && result.getOwner() == op)
+      os << "result " << result.getResultNumber();
+    else if (operand != op->getOperands().end())
+      os << "operand " << std::distance(op->getOperands().begin(), operand);
+    else if (result)
+      os << result.getOwner()->getName();
+    else
+      os << "block argument " << cast<BlockArgument>(value).getArgNumber();
+  }
+  return str;
+}
+
+/// Emit `foldResults`, the fold result of `op`, as a remark on `op`.
+static void emitFoldRemark(Operation *op, const OpFoldResults &foldResults) {
+  InFlightDiagnostic remark = op->emitRemark() << "fold: ";
+  if (foldResults.failed()) {
+    remark << "failure";
+    return;
+  }
+  if (foldResults.replacesAny()) {
+    remark << "[";
+    llvm::interleaveComma(foldResults.getReplacements(), remark,
+                          [&](OpFoldResult replacement) {
+                            remark << describeFoldReplacement(op, replacement);
+                          });
+    remark << "]";
+    if (foldResults.modifiedInPlace())
+      remark << " ";
+  }
+  if (foldResults.modifiedInPlace())
+    remark << "in place";
+}
+
+DiagnosedSilenceableFailure
+mlir::test::TestFoldOp::apply(transform::TransformRewriter &rewriter,
+                              transform::TransformResults &results,
+                              transform::TransformState &state) {
+  for (Operation *op : state.getPayloadOps(getTarget()))
+    emitFoldRemark(op, op->fold());
+  return DiagnosedSilenceableFailure::success();
+}
+
+void mlir::test::TestFoldOp::getEffects(
+    SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {
+  transform::onlyReadsHandle(getTargetMutable(), effects);
+  transform::modifiesPayload(effects);
+}
+
 namespace {
 /// Test extension of the Transform dialect. Registers additional ops and
 /// declares PDL as dependent dialect since the additional ops are using PDL
