@@ -37,11 +37,14 @@ public:
         rewriter(ctx, listener) {}
 
   /// Tries to perform folding on the given `op`, including unifying
-  /// deduplicated constants. If successful, replaces `op`'s uses with
-  /// folded results, and returns success. If the op was completely folded it is
-  /// erased. If it is just updated in place, `inPlaceUpdate` is set to true.
-  /// On success() and when in-place, the folder is invoked until
-  /// `maxIterations` is reached (default INT_MAX).
+  /// deduplicated constants. If successful, replaces the uses of the replaced
+  /// results of `op` that have uses with folded results, and returns success.
+  /// If the fold replaced every result, the op is erased. Otherwise, the op
+  /// stays and `inPlaceUpdate` is set to true. Constants are only created at
+  /// the start of the entry block of the insertion region. On failure, the fold
+  /// does not change `op`, but a constant that this folder owns can move to the
+  /// front of its block. On success() and when in-place, the folder is invoked
+  /// until `maxIterations` is reached (default INT_MAX).
   LogicalResult tryToFold(Operation *op, bool *inPlaceUpdate = nullptr,
                           int maxIterations = INT_MAX);
 
@@ -83,18 +86,22 @@ private:
   /// owned by this folder.
   bool isFolderOwnedConstant(Operation *op) const;
 
-  /// Tries to perform folding on the given `op`. If successful, populates
-  /// `results` with the results of the folding.
-  /// On success() and when in-place, the folder is invoked until
-  /// `maxIterations` is reached (default INT_MAX).
-  LogicalResult tryToFold(Operation *op, SmallVectorImpl<Value> &results,
-                          int maxIterations = INT_MAX);
-
   /// Try to process a set of fold results. Populates `results` on success,
-  /// otherwise leaves it unchanged.
+  /// otherwise leaves it unchanged. A null fold result gives a null entry in
+  /// `results`.
   LogicalResult processFoldResults(Operation *op,
                                    SmallVectorImpl<Value> &results,
                                    ArrayRef<OpFoldResult> foldResults);
+
+  /// Materialize the replacements of `foldResults`, a fold result of `op` that
+  /// replaces at least one result. Return one value per result of `op`, null
+  /// for a result that the fold keeps or that gets no constant.
+  FailureOr<SmallVector<Value>>
+  materializeReplacements(Operation *op, const OpFoldResults &foldResults);
+
+  /// Replace the uses of each result of `op` that has a non-null entry in
+  /// `replacements`. Return true if `replacements` has a non-null entry.
+  bool replaceResultUses(Operation *op, ArrayRef<Value> replacements);
 
   /// Try to get or create a new constant entry. On success this returns the
   /// constant operation, nullptr otherwise.
